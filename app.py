@@ -1,53 +1,56 @@
-import requests
-from PyPDF2 import PdfReader
-from io import BytesIO
-import docx
 from flask import Flask, request, jsonify
+import requests
+import fitz  # PyMuPDF
+from io import BytesIO
+from bs4 import BeautifulSoup
 
 app = Flask(__name__)
 
-def extract_pdf_text(url):
-    # Fetch PDF from the URL
-    response = requests.get(url)
-    file = BytesIO(response.content)
-    reader = PdfReader(file)
-    
-    text = ""
-    for page in reader.pages:
-        text += page.extract_text()
-    
-    return text
+@app.route('/extract_pdf_text', methods=['POST'])
+def extract_pdf_text():
+    try:
+        data = request.json
+        pdf_url = data.get("url")
+        
+        if not pdf_url:
+            return jsonify({"error": "URL is required"}), 400
+        
+        headers = {"User-Agent": "Mozilla/5.0"}  # Add headers to avoid blocking
+        response = requests.get(pdf_url, headers=headers, stream=True)
+        if response.status_code != 200:
+            return jsonify({"error": "Failed to fetch PDF"}), 400
+        
+        pdf_bytes = BytesIO(response.content)
+        
+        # Extract text from the PDF
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        extracted_text = "\n".join(page.get_text("text") for page in doc if page.get_text("text"))
+        
+        return jsonify({"text": extracted_text.strip()})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
-def extract_docx_text(url):
-    # Fetch Word document from the URL
-    response = requests.get(url)
-    file = BytesIO(response.content)
-    doc = docx.Document(file)
-    
-    text = ""
-    for paragraph in doc.paragraphs:
-        text += paragraph.text + '\n'
-    
-    return text
+@app.route('/extract_web_text', methods=['POST'])
+def extract_web_text():
+    try:
+        data = request.json
+        page_url = data.get("url")
+        
+        if not page_url:
+            return jsonify({"error": "URL is required"}), 400
 
-@app.route('/extract-text', methods=['POST'])
-def extract_text_from_document():
-    # Get the document URL from the request
-    data = request.get_json()
-    document_url = data.get("url")
-    
-    if not document_url:
-        return jsonify({"error": "No URL provided"}), 400
-    
-    # Check file extension and decide on extraction method
-    if document_url.lower().endswith(".pdf"):
-        text = extract_pdf_text(document_url)
-    elif document_url.lower().endswith(".docx"):
-        text = extract_docx_text(document_url)
-    else:
-        return jsonify({"error": "Unsupported file type"}), 400
-    
-    return jsonify({"text": text})
+        headers = {"User-Agent": "Mozilla/5.0"}  # Avoid blocking by some servers
+        response = requests.get(page_url, headers=headers)
+
+        if response.status_code != 200:
+            return jsonify({"error": "Failed to fetch the webpage"}), 400
+        
+        soup = BeautifulSoup(response.text, "html.parser")
+        extracted_text = soup.get_text(separator="\n", strip=True)  # Extract readable text
+        
+        return jsonify({"text": extracted_text})
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 if __name__ == '__main__':
-    app.run(debug=True)
+    app.run(host='0.0.0.0', port=5000, debug=True)
